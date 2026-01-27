@@ -4,7 +4,7 @@ import { useAuth } from "../../../auth";
 import { useCopyToClipboard, useDevice } from "../../../hooks";
 import type { HeaderMobileProps, IconName } from "../../../types";
 import { formatAddress } from "../../../utils";
-import { Dropdown, type DropdownItem } from "../../Dropdown";
+import { type DropdownItem, DropdownSelect } from "../../Dropdown";
 
 export const HeaderMobile: React.FC<HeaderMobileProps> = ({
   address,
@@ -53,10 +53,17 @@ export const HeaderMobile: React.FC<HeaderMobileProps> = ({
   const displayText = email || formatAddress(address);
 
   return (
-    <header className="flex flex-col w-full ">
+    <header className="flex flex-col w-full">
       <div className="flex justify-between items-start w-full">
-        <img src={logoSrc} alt="EVE Vault" className="h-20 w-auto" />
-        <Dropdown
+        <img
+          src={logoSrc}
+          alt="EVE Vault"
+          className="w-auto"
+          style={{
+            height: "clamp(3rem, calc(5rem - (500px - 100vw) * 0.08), 5rem)",
+          }}
+        />
+        <DropdownSelect
           items={dropdownItems}
           trigger={displayText}
           identicon={identicon}

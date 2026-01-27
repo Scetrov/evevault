@@ -1,6 +1,5 @@
 import {
   AddTokenScreen,
-  Layout,
   useAuthStore,
   useNetworkStore,
 } from "@evevault/shared";
@@ -17,14 +16,12 @@ function AddTokenPage() {
   };
 
   return (
-    <Layout>
-      <AddTokenScreen
-        user={user}
-        chain={chain || null}
-        onSuccess={handleSuccess}
-        onCancel={() => navigate({ to: "/wallet" })}
-      />
-    </Layout>
+    <AddTokenScreen
+      user={user}
+      chain={chain || null}
+      onSuccess={handleSuccess}
+      onCancel={() => navigate({ to: "/wallet" })}
+    />
   );
 }
 
