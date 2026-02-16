@@ -35,6 +35,17 @@ import { useNetworkStore } from "./networkStore";
 
 const log = createLogger();
 
+/** Callback invoked when lock() completes (e.g. extension uses it to broadcast disconnect). */
+let onLockCallback: (() => void) | null = null;
+
+/**
+ * Register a callback to run when the device store lock() action completes.
+ * Used by the extension to broadcast wallet disconnect to all tabs.
+ */
+export function registerOnLock(callback: (() => void) | null): void {
+  onLockCallback = callback;
+}
+
 const isHashedSecretKey = (value: unknown): value is HashedData => {
   if (
     typeof value !== "object" ||
@@ -630,6 +641,11 @@ export const useDeviceStore = create<DeviceState>()(
       lock: async () => {
         await ephKeyService.lock();
         set({ isLocked: true });
+        if (onLockCallback) {
+          onLockCallback();
+        } else {
+          log.error("No onLockCallback registered");
+        }
       },
 
       unlock: async (pin: string) => {
@@ -782,10 +798,12 @@ export const useDeviceStore = create<DeviceState>()(
             state.isLocked = true; // Force lock if secret key is lost
           }
 
-          // Web: Always start locked after rehydration since the signer is in-memory only
-          // User will need to re-enter PIN to unlock
+          // Web: The unlocked state (signer/expiry) is not persisted; after a full reload
+          // the in-memory ephKeyService will be locked even if isLocked persisted as false.
+          // To avoid inconsistent state (UI thinking it's unlocked while signing fails),
+          // recompute isLocked from ephKeyService.isUnlocked() and clear loading.
           if (isWeb() && state) {
-            state.isLocked = true;
+            state.isLocked = !ephKeyService.isUnlocked();
             state.loading = false;
           }
         };
