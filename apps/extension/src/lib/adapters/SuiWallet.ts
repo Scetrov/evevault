@@ -254,9 +254,12 @@ export class EveVaultWallet implements Wallet {
               publicKey: new Uint8Array(),
               chains: [SUI_DEVNET_CHAIN, SUI_TESTNET_CHAIN],
               features: [
+                StandardConnect,
+                StandardDisconnect,
                 SuiSignPersonalMessage,
                 SuiSignTransaction,
                 SuiSignAndExecuteTransaction,
+                EVEFRONTIER_SPONSORED_TRANSACTION,
               ],
             });
 
@@ -411,7 +414,13 @@ export class EveVaultWallet implements Wallet {
             id: crypto.randomUUID(),
             action:
               WalletStandardMessageTypes.EVEFRONTIER_SIGN_SPONSORED_TRANSACTION,
-            message: input.txAction,
+            message: {
+              action: input.txAction,
+              assembly: input.assembly,
+              chain: input.chain,
+              walletId: input.walletId,
+              jwt: input.jwt,
+            },
           });
         },
       );

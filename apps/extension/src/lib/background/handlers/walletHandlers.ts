@@ -1,6 +1,14 @@
+import {
+  getJwtForNetwork,
+  getStoredChain,
+  getStoredWalletAddress,
+} from "@evevault/shared/auth";
 import { createLogger } from "@evevault/shared/utils";
 import { openPopupWindow } from "../services/popupWindow";
-import type { BackgroundMessage, WalletActionMessage } from "../types";
+import type {
+  EveFrontierSponsoredTransactionMessage,
+  WalletActionMessage,
+} from "../types";
 
 const log = createLogger();
 
@@ -95,21 +103,72 @@ async function handleApprovePopup(
 }
 
 async function handleSponsoredTransaction(
-  message: BackgroundMessage,
+  message: EveFrontierSponsoredTransactionMessage,
   sender: chrome.runtime.MessageSender,
   sendResponse: (response?: unknown) => void,
 ): Promise<boolean> {
-  // Return boolean to indicate async response
-  // Message can be deconstructed as const { action, assembly, chain }
-
   const senderTabId = sender.tab?.id;
+  const { action, assembly } = message.message;
 
   try {
+    const chain = await getStoredChain();
+    const jwt = await getJwtForNetwork(chain);
+    if (!jwt?.access_token) {
+      sendResponse({
+        type: "sign_transaction_error",
+        error: "No JWT for current network. Re-authenticate required.",
+      });
+      return false;
+    }
+
+    const walletId = await getStoredWalletAddress();
+    if (!walletId) {
+      sendResponse({
+        type: "sign_transaction_error",
+        error: "Wallet address not found; sign in in the extension first.",
+      });
+      return false;
+    }
+
+    if (!assembly) {
+      throw new Error("Assembly not found");
+    }
+
     log.info("Eve Frontier sponsored transaction request received", {
-      action: message.action,
-      assembly: message.assembly,
-      chain: message.chain,
+      action,
+      assembly,
+      chain,
     });
+
+    // Fetch the txb to be signed from the Quasar proxy
+    const response = await fetch(
+      `https://api.test.tech.evefrontier.com/transactions/sponsored/assemblies/${action}`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          assemblyId: assembly,
+          ownerId: walletId,
+        }),
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${jwt.access_token}`,
+        },
+      },
+    );
+
+    const txb = await response.json();
+
+    // Sign the transaction with the zkSignAny function
+    // const { zkSignature, bytes } = await zkSignAny(
+    //   "TransactionData",
+    //   new Uint8Array(txb),
+    //   {
+    //     user,
+    //     ephemeralPublicKey,
+    //     maxEpoch,
+    //     getZkProof,
+    //   },
+    // );
 
     // This is a temporary solution to send the success message to the tab
     // The actual tx digest will depend on the quasar service
@@ -118,6 +177,7 @@ async function handleSponsoredTransaction(
         type: "sign_success",
         digest: "0x1234567890",
         effects: "0x1234567890",
+        txb,
         id: message.id,
       })
       .catch((err) => {

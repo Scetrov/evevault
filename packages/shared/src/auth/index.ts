@@ -1,12 +1,17 @@
 export { getUserManager } from "./authConfig";
 export { exchangeCodeForToken } from "./exchangeCode";
-export { getZkLoginAddress } from "./getZkLoginAddress";
+export {
+  clearZkLoginAddressCache,
+  getZkLoginAddress,
+} from "./getZkLoginAddress";
 export * from "./hooks/useAuth";
 export {
   clearAllJwts,
   clearJwtForNetwork,
   getAllStoredJwts,
   getJwtForNetwork,
+  getStoredChain,
+  getStoredWalletAddress,
   hasJwtForNetwork,
   storeJwt,
 } from "./storageService";
