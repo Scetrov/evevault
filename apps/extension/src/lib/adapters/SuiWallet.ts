@@ -34,26 +34,14 @@ import type {
   EveFrontierSponsoredTransactionMethod,
   EveFrontierSponsoredTransactionOutput,
   EveVaultWalletFeatures,
-  SignAndExecuteTransactionMessage,
   WalletEventListener,
 } from "../background/types";
 import { EVEFRONTIER_SPONSORED_TRANSACTION } from "../background/types";
+import { trySettle } from "../util/timeoutGuard";
 
 const log = createLogger();
 
-const isSignAndExecuteTransactionMessage = (
-  message: unknown,
-): message is SignAndExecuteTransactionMessage => {
-  if (typeof message !== "object" || message === null) {
-    return false;
-  }
-
-  const candidate = message as { type?: unknown };
-  return (
-    candidate.type === "sign_and_execute_transaction_success" ||
-    candidate.type === "sign_and_execute_transaction_error"
-  );
-};
+const APPROVAL_TIMEOUT_MS = 2 * 60 * 1000; // 2 minutes
 
 export class EveVaultWallet implements Wallet {
   readonly #version = "1.0.0" as const;
@@ -61,7 +49,7 @@ export class EveVaultWallet implements Wallet {
 
   #accounts: ReadonlyWalletAccount[] = [];
   #eventListeners = new Map<string, WalletEventListener[]>();
-  #currentChain: SuiChain = SUI_DEVNET_CHAIN;
+  #currentChain: SuiChain = SUI_TESTNET_CHAIN;
 
   get version() {
     return this.#version;
@@ -77,7 +65,7 @@ export class EveVaultWallet implements Wallet {
   }
 
   get chains(): Wallet["chains"] {
-    return [SUI_DEVNET_CHAIN, SUI_TESTNET_CHAIN] as `sui:${string}`[];
+    return [SUI_TESTNET_CHAIN, SUI_DEVNET_CHAIN] as `sui:${string}`[];
   }
 
   get accounts() {
@@ -86,7 +74,7 @@ export class EveVaultWallet implements Wallet {
         new ReadonlyWalletAccount({
           address: walletAccount.address,
           publicKey: walletAccount.publicKey,
-          chains: [SUI_DEVNET_CHAIN, SUI_TESTNET_CHAIN],
+          chains: [SUI_TESTNET_CHAIN, SUI_DEVNET_CHAIN],
           // The features that this account supports. This can be a subset of the wallet's supported features.
           features: [
             StandardConnect,
@@ -220,61 +208,71 @@ export class EveVaultWallet implements Wallet {
   #connect: StandardConnectMethod = async () => {
     return new Promise<StandardConnectOutput>((resolve, reject) => {
       const id = crypto.randomUUID();
+      const state = { settled: false };
 
       const onMsg = async (e: MessageEvent) => {
         const m = e.data || {};
 
         if (m.__from !== "Eve Vault" || m.id !== id) return;
-        window.removeEventListener("message", onMsg);
         if (m.type === "auth_success") {
-          const result = m.token;
+          if (trySettle(state, onMsg, timeoutId)) {
+            const result = m.token;
 
-          sessionStorage.setItem(
-            "evevault_jwt",
-            JSON.stringify(result.access_token),
-          );
+            sessionStorage.setItem(
+              "evevault_jwt",
+              JSON.stringify(result.access_token),
+            );
 
-          if (result) {
-            const zkLoginResponse = await getZkLoginAddress({
-              jwt: result.access_token,
-              enokiApiKey: import.meta.env.VITE_ENOKI_API_KEY,
-            });
+            if (result) {
+              const zkLoginResponse = await getZkLoginAddress({
+                jwt: result.access_token,
+                enokiApiKey: import.meta.env.VITE_ENOKI_API_KEY,
+              });
 
-            if (zkLoginResponse.error) {
-              throw new Error(zkLoginResponse.error.message);
+              if (zkLoginResponse.error) {
+                throw new Error(zkLoginResponse.error.message);
+              }
+
+              if (!zkLoginResponse.data) {
+                throw new Error("No data returned from zkLogin address lookup");
+              }
+
+              const { address } = zkLoginResponse.data;
+              const newAccount = new ReadonlyWalletAccount({
+                address,
+                publicKey: new Uint8Array(),
+                chains: [SUI_TESTNET_CHAIN, SUI_DEVNET_CHAIN],
+                features: [
+                  StandardConnect,
+                  StandardDisconnect,
+                  SuiSignPersonalMessage,
+                  SuiSignTransaction,
+                  SuiSignAndExecuteTransaction,
+                  EVEFRONTIER_SPONSORED_TRANSACTION,
+                ],
+              });
+
+              this.#accounts = [newAccount];
+
+              // Emit accounts change event - per spec, accounts array contains all current accounts
+              this.#emitChangeEvent({ accounts: this.#accounts });
             }
 
-            if (!zkLoginResponse.data) {
-              throw new Error("No data returned from zkLogin address lookup");
-            }
-
-            const { address } = zkLoginResponse.data;
-            const newAccount = new ReadonlyWalletAccount({
-              address,
-              publicKey: new Uint8Array(),
-              chains: [SUI_DEVNET_CHAIN, SUI_TESTNET_CHAIN],
-              features: [
-                StandardConnect,
-                StandardDisconnect,
-                SuiSignPersonalMessage,
-                SuiSignTransaction,
-                SuiSignAndExecuteTransaction,
-                EVEFRONTIER_SPONSORED_TRANSACTION,
-              ],
-            });
-
-            this.#accounts = [newAccount];
-
-            // Emit accounts change event - per spec, accounts array contains all current accounts
-            this.#emitChangeEvent({ accounts: this.#accounts });
+            resolve({ accounts: this.#accounts });
           }
-
-          resolve({ accounts: this.#accounts });
-        } else reject(new Error(m.error?.message || "Authentication failed"));
+        } else {
+          if (trySettle(state, onMsg, timeoutId)) {
+            reject(new Error(m.error?.message || "Authentication failed"));
+          }
+        }
       };
 
-      // Trigger login
       window.addEventListener("message", onMsg);
+      const timeoutId = setTimeout(() => {
+        if (trySettle(state, onMsg)) {
+          reject(new Error("Connection request timed out"));
+        }
+      }, APPROVAL_TIMEOUT_MS);
       window.postMessage({ __to: "Eve Vault", type: "connect", id }, "*");
     });
   };
@@ -283,28 +281,39 @@ export class EveVaultWallet implements Wallet {
     input: SuiSignPersonalMessageInput,
   ) => {
     return new Promise<SuiSignPersonalMessageOutput>((resolve, reject) => {
+      const id = crypto.randomUUID();
+      const state = { settled: false };
+
       const onMsg = async (e: MessageEvent) => {
         const m = e.data || {};
 
-        if (m.__from !== "Eve Vault") return;
-        window.removeEventListener("message", onMsg);
+        if (m.__from !== "Eve Vault" || m.id !== id) return;
 
         if (m.type === "sign_success") {
-          resolve({
-            bytes: m.bytes,
-            signature: m.signature,
-          } as SuiSignPersonalMessageOutput);
+          if (trySettle(state, onMsg, timeoutId)) {
+            resolve({
+              bytes: m.bytes,
+              signature: m.signature,
+            } as SuiSignPersonalMessageOutput);
+          }
         } else if (m.type === "sign_personal_message_error") {
-          reject(new Error(m.error));
+          if (trySettle(state, onMsg, timeoutId)) {
+            reject(new Error(m.error));
+          }
         }
       };
 
       window.addEventListener("message", onMsg);
+      const timeoutId = setTimeout(() => {
+        if (trySettle(state, onMsg)) {
+          reject(new Error("Message signing timed out"));
+        }
+      }, APPROVAL_TIMEOUT_MS);
       log.debug("[SuiWallet] #signPersonalMessage input", input);
       window.postMessage(
         {
           __to: "Eve Vault",
-          id: crypto.randomUUID(),
+          id,
           action: "sign_personal_message",
           message: input.message,
           account: input.account,
@@ -320,27 +329,40 @@ export class EveVaultWallet implements Wallet {
     const tx = await input.transaction.toJSON();
 
     return new Promise<SignedTransaction>((resolve, reject) => {
+      const id = crypto.randomUUID();
+      const state = { settled: false };
+
       const onMsg = async (e: MessageEvent) => {
         const m = e.data || {};
 
+        if (m.__from !== "Eve Vault" || m.id !== id) return;
         log.debug("[SuiWallet] #signTransaction message", m);
 
         if (m.type === "sign_success") {
-          resolve({
-            bytes: m.bytes,
-            signature: m.signature,
-          });
+          if (trySettle(state, onMsg, timeoutId)) {
+            resolve({
+              bytes: m.bytes,
+              signature: m.signature,
+            });
+          }
         } else if (m.type === "sign_transaction_error") {
-          reject(new Error(m.error));
+          if (trySettle(state, onMsg, timeoutId)) {
+            reject(new Error(m.error));
+          }
         }
       };
 
       window.addEventListener("message", onMsg);
+      const timeoutId = setTimeout(() => {
+        if (trySettle(state, onMsg)) {
+          reject(new Error("Transaction signing timed out"));
+        }
+      }, APPROVAL_TIMEOUT_MS);
 
       window.postMessage(
         {
           __to: "Eve Vault",
-          id: crypto.randomUUID(),
+          id,
           action: "sign_transaction",
           transaction: tx,
           account: input.account,
@@ -354,30 +376,45 @@ export class EveVaultWallet implements Wallet {
   #signAndExecuteTransaction: SuiSignAndExecuteTransactionMethod = async (
     input: SuiSignAndExecuteTransactionInput,
   ) => {
+    const tx = await input.transaction.toJSON();
+    const id = crypto.randomUUID();
+
     return new Promise<SuiSignAndExecuteTransactionOutput>(
       (resolve, reject) => {
-        const messageListener = (message: unknown) => {
-          if (!isSignAndExecuteTransactionMessage(message)) {
-            return;
-          }
+        const state = { settled: false };
 
-          if (message.type === "sign_and_execute_transaction_success") {
-            chrome.runtime.onMessage.removeListener(messageListener);
-            resolve(message.result);
-          } else if (message.type === "sign_and_execute_transaction_error") {
-            chrome.runtime.onMessage.removeListener(messageListener);
-            reject(new Error(message.error));
+        const onMsg = (e: MessageEvent) => {
+          const m = e.data || {};
+          if (m.__from !== "Eve Vault" || m.id !== id) return;
+
+          if (m.type === "sign_and_execute_transaction_success") {
+            if (trySettle(state, onMsg, timeoutId)) {
+              resolve(m.result);
+            }
+          } else if (m.type === "sign_and_execute_transaction_error") {
+            if (trySettle(state, onMsg, timeoutId)) {
+              reject(new Error(m.error));
+            }
           }
         };
 
-        chrome.runtime.onMessage.addListener(messageListener);
-
-        chrome.runtime.sendMessage({
-          action: WalletStandardMessageTypes.SIGN_AND_EXECUTE_TRANSACTION,
-          transaction: input.transaction,
-          account: input.account,
-          chain: input.chain,
-        });
+        window.addEventListener("message", onMsg);
+        const timeoutId = setTimeout(() => {
+          if (trySettle(state, onMsg)) {
+            reject(new Error("Transaction approval timed out"));
+          }
+        }, APPROVAL_TIMEOUT_MS);
+        window.postMessage(
+          {
+            __to: "Eve Vault",
+            id,
+            action: WalletStandardMessageTypes.SIGN_AND_EXECUTE_TRANSACTION,
+            transaction: tx,
+            account: input.account,
+            chain: input.chain,
+          },
+          "*",
+        );
       },
     );
   };
@@ -386,24 +423,35 @@ export class EveVaultWallet implements Wallet {
     async (input: EveFrontierSponsoredTransactionInput) => {
       return new Promise<EveFrontierSponsoredTransactionOutput>(
         (resolve, reject) => {
+          const id = crypto.randomUUID();
+          const state = { settled: false };
+
           const onMsg = async (e: MessageEvent) => {
             const m = e.data || {};
 
+            if (m.__from !== "Eve Vault" || m.id !== id) return;
             log.debug("[SuiWallet] #signSponsoredTransaction message", m);
 
             if (m.type === "sign_success") {
-              window.removeEventListener("message", onMsg);
-              resolve({
-                digest: m.digest,
-                effects: m.effects,
-              });
+              if (trySettle(state, onMsg, timeoutId)) {
+                resolve({
+                  digest: m.digest,
+                  effects: m.effects,
+                });
+              }
             } else if (m.type === "sign_sponsored_transaction_error") {
-              window.removeEventListener("message", onMsg);
-              reject(new Error(m.error));
+              if (trySettle(state, onMsg, timeoutId)) {
+                reject(new Error(m.error));
+              }
             }
           };
 
           window.addEventListener("message", onMsg);
+          const timeoutId = setTimeout(() => {
+            if (trySettle(state, onMsg)) {
+              reject(new Error("Sponsored transaction timed out"));
+            }
+          }, APPROVAL_TIMEOUT_MS);
           log.debug(
             "[SuiWallet] #signEveFrontierSponsoredTransaction input",
             input,
@@ -411,7 +459,7 @@ export class EveVaultWallet implements Wallet {
 
           window.postMessage({
             __to: "Eve Vault",
-            id: crypto.randomUUID(),
+            id,
             action:
               WalletStandardMessageTypes.EVEFRONTIER_SIGN_SPONSORED_TRANSACTION,
             message: {
