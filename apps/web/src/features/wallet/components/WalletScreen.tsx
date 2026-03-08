@@ -14,7 +14,7 @@ import {
 import { useDevice, useEpochExpiration } from "@evevault/shared/hooks";
 import { useDeviceStore } from "@evevault/shared/stores/deviceStore";
 import { useNetworkStore } from "@evevault/shared/stores/networkStore";
-import { createSuiClient } from "@evevault/shared/sui";
+import { createSuiClient, getFaucetUrlForChain } from "@evevault/shared/sui";
 import {
   createLogger,
   getDevModeEnabled,
@@ -59,6 +59,7 @@ export const WalletScreen = () => {
     unlock,
   } = useDevice();
   const { chain } = useNetworkStore();
+  const faucetUrl = getFaucetUrlForChain(chain);
 
   // Create suiClient with useMemo to recreate when chain changes
   const suiClient = React.useMemo(() => {
@@ -144,10 +145,9 @@ export const WalletScreen = () => {
       setTxDigest(null);
       return;
     }
-    log.info("Transaction executed", {
-      digest: result.Transaction.digest,
-    });
-    setTxDigest(result.Transaction.digest ?? null);
+    const digest = result.Transaction?.digest ?? null;
+    log.info("Transaction executed", { digest });
+    setTxDigest(digest);
   }, [user, maxEpoch, ephemeralPublicKey, getZkProof, suiClient]);
 
   const handleTokenRefreshTest = useCallback(async () => {
@@ -232,6 +232,11 @@ export const WalletScreen = () => {
         onDevModeToggle={handleDevModeToggle}
         onSignSubmitTxClick={devMode ? handleSignAndSubmitTx : undefined}
         onTokenRefreshTestClick={devMode ? handleTokenRefreshTest : undefined}
+        onFaucetTestSuiClick={
+          devMode && faucetUrl
+            ? () => window.open(faucetUrl, "_blank", "noopener,noreferrer")
+            : undefined
+        }
       />
       {/* Token Section: pass defined chain (testnet fallback) so balance and token list use the same network and we avoid cross-network transfer/balance errors */}
       <TokenListSection

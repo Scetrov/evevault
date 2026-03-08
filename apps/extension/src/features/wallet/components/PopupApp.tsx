@@ -19,6 +19,7 @@ import {
 } from "@evevault/shared/hooks";
 import { LockScreen } from "@evevault/shared/screens";
 import { useNetworkStore } from "@evevault/shared/stores/networkStore";
+import { getFaucetUrlForChain } from "@evevault/shared/sui";
 import {
   createLogger,
   EXTENSION_ROUTES,
@@ -44,6 +45,7 @@ function App() {
   const { user, loading: authLoading, error: authError } = useAuth();
   const { isLocked, isPinSet, error: deviceError, unlock } = useDevice();
   const { chain } = useNetworkStore();
+  const faucetUrl = getFaucetUrlForChain(chain);
   const { handleLogin } = useLogin();
   const { nonce } = useDevice();
   const { handleTestTransaction, txDigest } = useTestTransaction();
@@ -179,6 +181,11 @@ function App() {
         onDevModeToggle={handleDevModeToggle}
         onSignSubmitTxClick={devMode ? handleTestTransaction : undefined}
         onTokenRefreshTestClick={devMode ? handleTokenRefreshTest : undefined}
+        onFaucetTestSuiClick={
+          devMode && faucetUrl
+            ? () => window.open(faucetUrl, "_blank", "noopener,noreferrer")
+            : undefined
+        }
       />
 
       {/* Token Section */}
