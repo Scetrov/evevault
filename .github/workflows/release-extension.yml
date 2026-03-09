@@ -83,7 +83,7 @@ jobs:
 
       - name: Generate artifact attestation
         id: attest
-        uses: actions/attest@v4
+        uses: actions/attest@e4564b77a2c8b3f4eb9bacf4ba83e6e420d3d11e
         with:
           subject-checksums: ${{ env.CHECKSUMS_FILE }}
 
