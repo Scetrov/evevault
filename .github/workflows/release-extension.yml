@@ -85,7 +85,7 @@ jobs:
         id: attest
         uses: actions/attest@e4564b77a2c8b3f4eb9bacf4ba83e6e420d3d11e
         with:
-          subject-checksums: ${{ env.CHECKSUMS_FILE }}
+          subject-path: ${{ env.EXTENSION_ZIP }}
 
       - name: Copy attestation to fixed name
         run: cp "${{ steps.attest.outputs.bundle-path }}" "${ATTESTATION_FILE}"
