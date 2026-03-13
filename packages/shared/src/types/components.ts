@@ -9,6 +9,7 @@ import type {
   SVGProps,
 } from "react";
 import type { ThemeToken } from "../theme/colorTheme";
+import type { TenantId } from "./tenant";
 
 export interface SwitchProps {
   isChecked: boolean;
@@ -202,6 +203,12 @@ export interface HeaderMobileProps {
   onTokenRefreshTestClick?: () => void;
   /** Callback when "Faucet test SUI" menu item is clicked (dev mode only) */
   onFaucetTestSuiClick?: () => void;
+  /** App version shown in dev dropdown (from each app's package.json at build time) */
+  version?: string;
+  /** Current tenant id (for Server dropdown when in dev mode) */
+  currentTenantId?: string;
+  /** Callback when user selects a different Server (tenant) in dev mode */
+  onServerChange?: (tenantId: TenantId) => void;
 }
 
 export type CornersColor =
@@ -327,6 +334,12 @@ export interface TokenRowProps {
   onCopyAddress: (address: string) => void;
 }
 
+export interface ExtendedTokenRowProps extends TokenRowProps {
+  onTransfer?: () => void;
+  isRefreshing?: boolean;
+  refreshTick?: number;
+}
+
 export type LayoutVariant = "web" | "extension";
 
 export interface LayoutProps {
@@ -345,21 +358,31 @@ export type { NavPath, RoutePath } from "../utils/routes";
 // Transaction History Types
 export type TransactionDirection = "sent" | "received";
 
+/** Single balance change within a transaction (e.g. EVE transfer or SUI gas) */
+export interface TransactionBalanceChange {
+  /** Formatted amount (human-readable, always non-negative; use isDebit for sign) */
+  amount: string;
+  /** Token symbol (e.g., "SUI", "EVE") */
+  tokenSymbol: string;
+  /** Human-readable token name from metadata (e.g. "Sui", "EVE Token") */
+  tokenName?: string;
+  /** Full coin type identifier */
+  coinType: string;
+  /** True when this change is a debit (e.g. gas, sent amount); used for display sign */
+  isDebit?: boolean;
+}
+
 export interface Transaction {
   /** Unique transaction digest */
   digest: string;
   /** Unix timestamp in milliseconds */
   timestamp: number;
-  /** Whether user sent or received this transaction */
+  /** Whether user sent or received this transaction (from primary change) */
   direction: TransactionDirection;
   /** Recipient if sent, sender if received */
   counterparty: string;
-  /** Formatted amount (human-readable) */
-  amount: string;
-  /** Token symbol (e.g., "SUI", "USDC") */
-  tokenSymbol: string;
-  /** Full coin type identifier */
-  coinType: string;
+  /** All balance changes for the user in this tx (e.g. EVE + SUI gas) */
+  balanceChanges: TransactionBalanceChange[];
 }
 
 export interface TransactionsScreenProps {
